@@ -7,17 +7,18 @@ from digitalio import DigitalInOut, Direction, Pull # type: ignore
 switch = DigitalInOut(board.D3)
 switch.direction = Direction.INPUT
 switch.pull = Pull.UP
-switchPower = False
+lastState = True
+override = False
  
 photocell_pin = board.A2  #pin 0 is Analog input 2 
 photocell = analogio.AnalogIn(photocell_pin)
-phPower = False
 
 pixel_pin = board.D2
 num_pixels = 8        #number of leds pixels on the ring
  
 pixels = neopixel.NeoPixel(pixel_pin, num_pixels, brightness=0.3, auto_write=False)
- 
+pixelState = False
+
 RED = (255, 0, 0) # RGB
 YELLOW = (255, 150, 0)
 GREEN = (0, 255, 0)
@@ -39,25 +40,26 @@ def defMode():
             pixels[i] = WHITE
     pixels.show()
 
+def off():
+    pixels.fill(OFF)
+    pixels.show()
+
 while True:
+    currentState = switch.value
+
     # Print states
-    print(str(switch.value) + str(switchPower) + str(phPower))
+    print("Last: " + str(lastState) + " Current: "+ str(currentState) + " Button: " + str(override))
     print(">value:" + str(photocell.value) + "\r\n")
 
-    if (photocell.value <= 10000):
-        phPower = True
-    else:
-        phPower = False
-
-    #Manual On Off
-    if switch.value == False and switchPower == False:
-        switchPower = True
-    elif switch.value == False and switchPower == True:
-        switchPower = False
-
-    if switchPower == False or phPower == False:
-        pixels.fill(OFF)
-        pixels.show()
-    elif switchPower == True or phPower == True:
+    if lastState and not currentState:
+        override = not override
+    
+    if override:
         defMode()
-    time.sleep(0.5)
+    elif photocell.value < 10000:
+        defMode()
+    else:
+        off()
+
+    lastState = currentState
+    time.sleep(0.12)
