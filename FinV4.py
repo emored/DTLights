@@ -1,243 +1,263 @@
-# Standard library imports
-import time # For time-based operations like delays and debouncing
-import gc   # Import garbage collector
+"""
+NeoPixel controller for CircuitPython
+• PEP-8 style, no f-strings
+• Low heap churn, no fade-out flash
+• Lightweight debug messages (compile-time toggle)
+"""
 
-# CircuitPython specific imports
-import board # Provides access to board pins
-import neopixel # For controlling NeoPixel LEDs
-import analogio # For reading analog values (like from a photocell)
-from digitalio import DigitalInOut, Direction, Pull # For digital I/O (switches)
+import time
+import gc
 
-# --- Configuration Constants ---
-debugMode = False
+import board
+import neopixel
+import analogio
+from digitalio import DigitalInOut, Direction, Pull
 
-# Momentary Switch Configuration
-mSwitchPin = board.D3
-doubleClickWindow = 0.25
+# ────────────────────── CONFIG ────────────────────────────────
+DEBUG = True                      # ← set True to see diagnostics
 
-# Latching Switch Configuration
-lSwitchPin = board.D1
+# ── lightweight debug helper ──────────────────────────────────
+if DEBUG:
+    def dbg(*args):
+        print(*args)               # no string building
+else:
+    def dbg(*_):
+        pass                       # stub → zero run-time cost
 
-# Photocell Configuration
-photocellPin = board.A2
-photocellOnThreshold = 9500
-photocellOffThreshold = 10500
+M_SWITCH_PIN = board.D3            # momentary switch (pull-up)
+L_SWITCH_PIN = board.D1            # latching  switch (pull-up)
+PHOTOCELL_PIN = board.A2
+NEOPIXEL_PIN = board.D2
 
-# NeoPixel Configuration
-neopixelPin = board.D2
-numPixels = 8
-alertBlinks = 3
-alertBlinkDuration = 0.1
-rainbowCycleSpeed = 1
+NUM_PIXELS = 8
+DOUBLE_CLICK_WINDOW = 0.25         # s
 
-breathingMin = 0.1
-breathingMax = 1.0
-breathingStep = 0.02
+PHOTO_ON_THRESHOLD = 9500
+PHOTO_OFF_THRESHOLD = 10500
 
-fadeSteps = 8
-fadeDelay = 0.0135
+ALERT_BLINKS = 3
+ALERT_BLINK_TIME = 0.10            # s
 
-# --- Hardware Setup ---
-mSwitch = DigitalInOut(mSwitchPin)
-mSwitch.direction = Direction.INPUT
-mSwitch.pull = Pull.UP
-mSwitchLastState = True
-mSwitchClickTime = 0
+RAINBOW_SPEED = 1                  # wheel step / loop
 
-lSwitch = DigitalInOut(lSwitchPin)
-lSwitch.direction = Direction.INPUT
-lSwitch.pull = Pull.UP
+BREATH_MIN = 0.10
+BREATH_MAX = 1.00
+BREATH_STEP = 0.02
 
-photocell = analogio.AnalogIn(photocellPin)
-photocellEnabled = True
+FADE_STEPS = 8
+FADE_DELAY = 0.0135                # s
 
-pixels = neopixel.NeoPixel(neopixelPin, numPixels, brightness=1.0, auto_write=False)
+# ────────────────────── COLORS ───────────────────────────────
+OFF        = (0, 0, 0)
+CUST_YL    = (255, 150, 20)
+CUST_RD    = (255,  30, 30)
+WHITE      = (255, 255, 100)
 
-# --- Global State Variables ---
-pixelState = False
-currentModeIndex = 0
-rainbowOffset = 0
-breathingIntensity = breathingMin
-breathingDirection = 1
+S_RED      = (255,   0,   0)
+S_ORANGE   = (255, 120,   0)
+S_YELLOW   = (255, 200,   0)
+S_GREEN    = (  0, 255,   0)
+S_BLUE     = (  0,   0, 255)
+S_VIOLET   = (148,   0, 211)
+S_LBLUE    = (100, 180, 255)
 
-# --- Color Definitions & Pre-allocated Lists ---
-OFF_COLOR = (0, 0, 0)
-OFF_COLOR_LIST = [OFF_COLOR] * numPixels
+GREEN_OK   = (0, 255, 0)
+RED_ALERT  = (255, 0, 0)
 
-_CUSTYL = (255, 150, 20); _CUSTRD = (255, 30, 30); _WHITE_DEFAULT = (255, 255, 100)
-_RED_STATIC = (255, 0, 0); _ORANGE_STATIC = (255, 120, 0); _YELLOW_STATIC = (255, 200, 0)
-_GREEN_STATIC = (0, 255, 0); _BLUE_STATIC = (0, 0, 255); _VIOLET_STATIC = (148, 0, 211)
-_LIGHT_BLUE_STATIC = (100, 180, 255)
-_GREEN_ALERT = (0, 255, 0); _RED_ALERT = (255, 0, 0)
+OFF_LIST = [OFF] * NUM_PIXELS      # reusable “blank” buffer
 
-# --- Helper Functions ---
+# ─────────────────── HARDWARE SET-UP ──────────────────────────
+m_switch = DigitalInOut(M_SWITCH_PIN)
+m_switch.direction = Direction.INPUT
+m_switch.pull = Pull.UP
+m_prev = True
+m_click_time = 0.0
+
+l_switch = DigitalInOut(L_SWITCH_PIN)
+l_switch.direction = Direction.INPUT
+l_switch.pull = Pull.UP
+
+photocell = analogio.AnalogIn(PHOTOCELL_PIN)
+photocell_enabled = True
+
+pixels = neopixel.NeoPixel(
+    NEOPIXEL_PIN, NUM_PIXELS, brightness=1.0, auto_write=False
+)
+
+# ───────────────────────── STATE ──────────────────────────────
+pixels_on = False
+mode_idx = 0
+
+rainbow_offset = 0
+breath_intensity = BREATH_MIN
+breath_dir = 1
+
+# ─────────────────────── HELPERS ──────────────────────────────
 def wheel(pos):
-    if not (0 <= pos <= 255): return (0,0,0)
-    if pos < 85: return (int(pos * 3), int(255 - pos * 3), 0)
-    elif pos < 170: pos -= 85; return (int(255 - pos * 3), 0, int(pos * 3))
-    else: pos -= 170; return (0, int(pos * 3), int(255 - pos * 3))
+    if not 0 <= pos <= 255:
+        return OFF
+    if pos < 85:
+        return pos * 3, 255 - pos * 3, 0
+    if pos < 170:
+        pos -= 85
+        return 255 - pos * 3, 0, pos * 3
+    pos -= 170
+    return 0, pos * 3, 255 - pos * 3
 
-def interpColor(color1, color2, factor):
-    r = int(color1[0] * (1 - factor) + color2[0] * factor)
-    g = int(color1[1] * (1 - factor) + color2[1] * factor)
-    b = int(color1[2] * (1 - factor) + color2[2] * factor)
-    return (r, g, b)
 
-def exeFade(sourcePixel, targetPixel):
-    for step in range(fadeSteps + 1):
-        factor = step / fadeSteps
-        for i in range(numPixels):
-            pixels[i] = interpColor(sourcePixel[i], targetPixel[i], factor)
+def lerp(c1, c2, t):
+    return (
+        int(c1[0] + (c2[0] - c1[0]) * t),
+        int(c1[1] + (c2[1] - c1[1]) * t),
+        int(c1[2] + (c2[2] - c1[2]) * t),
+    )
+
+
+def fade(src, dst):
+    for step in range(FADE_STEPS + 1):
+        t = step / FADE_STEPS
+        for i in range(NUM_PIXELS):
+            pixels[i] = lerp(src[i], dst[i], t)
         pixels.show()
-        time.sleep(fadeDelay)
+        time.sleep(FADE_DELAY)
 
-# --- Mode Functions ---
-def modeDefault():
-    for i in range(numPixels):
-        if i == 0: pixels[i] = _CUSTYL
-        elif i == 4: pixels[i] = _CUSTRD
-        else: pixels[i] = _WHITE_DEFAULT
+
+def snapshot():
+    return list(pixels)            # copy current strip buffer
+
+
+def capture(index):
+    original = pixels.brightness
+    pixels.brightness = 0.0
+    MODES[index][1]()
+    buf = list(pixels)
+    pixels.brightness = original
+    return buf
+
+
+def blink(colour):
+    for _ in range(ALERT_BLINKS):
+        pixels.fill(colour)
+        pixels.show()
+        time.sleep(ALERT_BLINK_TIME)
+        pixels.fill(OFF)
+        pixels.show()
+        time.sleep(ALERT_BLINK_TIME)
+
+# ───────────────────────── MODES ──────────────────────────────
+def mode_default():
+    buf = [WHITE] * NUM_PIXELS
+    buf[0] = CUST_YL
+    buf[4] = CUST_RD
+    pixels[:] = buf
     pixels.show()
 
-def modeRainbow():
-    global rainbowOffset
-    for i in range(numPixels):
-        pixelIndex = (i * 256 // numPixels) + rainbowOffset
-        pixels[i] = wheel(pixelIndex & 255)
+
+def mode_rainbow():
+    global rainbow_offset
+    for i in range(NUM_PIXELS):
+        idx = (i * 256 // NUM_PIXELS) + rainbow_offset
+        pixels[i] = wheel(idx & 255)
     pixels.show()
-    rainbowOffset = (rainbowOffset + rainbowCycleSpeed) & 255
+    rainbow_offset = (rainbow_offset + RAINBOW_SPEED) & 255
 
-def modeAnyStatic(targetColor): pixels.fill(targetColor); pixels.show()
 
-def modeBreathingWhite():
-    global breathingIntensity, breathingDirection
-    breathingIntensity += breathingStep * breathingDirection
-    if breathingIntensity >= breathingMax:
-        breathingIntensity = breathingMax; breathingDirection = -1
-    elif breathingIntensity <= breathingMin:
-        breathingIntensity = breathingMin; breathingDirection = 1
-    r = int(_WHITE_DEFAULT[0] * breathingIntensity)
-    g = int(_WHITE_DEFAULT[1] * breathingIntensity)
-    b = int(_WHITE_DEFAULT[2] * breathingIntensity)
-    pixels.fill((r,g,b)); pixels.show()
+def mode_static(colour):
+    pixels.fill(colour)
+    pixels.show()
 
-modes = [
-    modeDefault,
-    lambda: modeAnyStatic(_RED_STATIC), lambda: modeAnyStatic(_ORANGE_STATIC),
-    lambda: modeAnyStatic(_YELLOW_STATIC), lambda: modeAnyStatic(_GREEN_STATIC),
-    lambda: modeAnyStatic(_BLUE_STATIC), lambda: modeAnyStatic(_VIOLET_STATIC),
-    lambda: modeAnyStatic(_LIGHT_BLUE_STATIC), modeBreathingWhite, modeRainbow
-]
 
-modeNames = None # Set to None if debugMode is False
-if debugMode:
-    modeNames = ["Default", "S.Red", "S.Orange", "S.Yellow", "S.Green", "S.Blue",
-                 "S.Violet", "L.Blue", "BreathW", "Rainbow"]
+def mode_breathe():
+    global breath_intensity, breath_dir
+    breath_intensity += BREATH_STEP * breath_dir
+    if breath_intensity >= BREATH_MAX:
+        breath_intensity = BREATH_MAX
+        breath_dir = -1
+    elif breath_intensity <= BREATH_MIN:
+        breath_intensity = BREATH_MIN
+        breath_dir = 1
+    scaled = (
+        int(WHITE[0] * breath_intensity),
+        int(WHITE[1] * breath_intensity),
+        int(WHITE[2] * breath_intensity),
+    )
+    pixels.fill(scaled)
+    pixels.show()
 
-def captureTarget(targetMode):
-    """Renders a mode to the internal pixels buffer and returns a copy
-       WITHOUT causing a visible flash on the physical LEDs."""
-    original_brightness = pixels.brightness
-    pixels.brightness = 0.0 # Make pixels temporarily invisible to prevent flash
 
-    modes[targetMode]() # Mode function is called, its show() has no visible effect
+MODES = (
+    ("Default",        mode_default),
+    ("Static Red",     lambda: mode_static(S_RED)),
+    ("Static Orange",  lambda: mode_static(S_ORANGE)),
+    ("Static Yellow",  lambda: mode_static(S_YELLOW)),
+    ("Static Green",   lambda: mode_static(S_GREEN)),
+    ("Static Blue",    lambda: mode_static(S_BLUE)),
+    ("Static Violet",  lambda: mode_static(S_VIOLET)),
+    ("Static LBlue",   lambda: mode_static(S_LBLUE)),
+    ("Breathe White",  mode_breathe),
+    ("Rainbow",        mode_rainbow),
+)
 
-    capturedData = list(pixels) # Capture the pixel data
-
-    pixels.brightness = original_brightness # Restore original brightness
-    return capturedData
-
-def off():
-    global pixelState
-    pixels.fill(OFF_COLOR); pixels.show()
-    pixelState = False
-
-def photocellAlert(prevState):
-    global currentModeIndex
-    prevBrightness = pixels.brightness
-    if prevBrightness < 1.0: pixels.brightness = 1.0
-    
-    blinkColor = _GREEN_ALERT if photocellEnabled else _RED_ALERT
-    for _ in range(alertBlinks):
-        pixels.fill(blinkColor); pixels.show(); time.sleep(alertBlinkDuration)
-        pixels.fill(OFF_COLOR); pixels.show(); time.sleep(alertBlinkDuration)
-    
-    if prevBrightness < 1.0: pixels.brightness = prevBrightness
-
-    if prevState: modes[currentModeIndex]()
-    else: pixels.fill(OFF_COLOR); pixels.show()
-
-# --- Main Loop ---
-off()
+# ──────────────────── STARTUP ─────────────────────────────────
+pixels.fill(OFF)
+pixels.show()
 gc.collect()
+dbg("Startup complete")
 
+# ──────────────────── MAIN LOOP ───────────────────────────────
 while True:
-    currentTime = time.monotonic()
+    now = time.monotonic()
+    m_state = m_switch.value          # pull-up: True → not pressed
+    l_active = not l_switch.value
+    photo_val = photocell.value
 
-    mSwitchCurrentState = mSwitch.value
-    lSwitchOn = not lSwitch.value
-    photocellLevel = photocell.value
+    # ── momentary switch events ───────────────────────────────
+    if m_prev and not m_state:        # falling edge
+        dbg("M-switch press @", now)
+        if m_click_time and (now - m_click_time < DOUBLE_CLICK_WINDOW):
+            photocell_enabled = not photocell_enabled
+            dbg("Double-click: photocell enabled?", photocell_enabled)
+            blink(GREEN_OK if photocell_enabled else RED_ALERT)
+            m_click_time = 0.0
+        else:
+            m_click_time = now
 
-    # --- Momentary Switch Logic ---
-    if mSwitchLastState and not mSwitchCurrentState: # Press
-        if mSwitchClickTime != 0 and (currentTime - mSwitchClickTime < doubleClickWindow): # Double click
-            photocellEnabled = not photocellEnabled
-            photocellAlert(pixelState)
-            mSwitchClickTime = 0 
-        else: # First click
-            mSwitchClickTime = currentTime
+    if m_click_time and (now - m_click_time >= DOUBLE_CLICK_WINDOW):
+        dbg("Single-click: advance mode")
+        if pixels_on:
+            fade(snapshot(), OFF_LIST)
+            mode_idx = (mode_idx + 1) % len(MODES)
+            fade(OFF_LIST, capture(mode_idx))
+        else:
+            mode_idx = (mode_idx + 1) % len(MODES)
+        dbg("Current mode →", mode_idx, MODES[mode_idx][0])
+        m_click_time = 0.0
 
-    if mSwitchClickTime != 0 and (currentTime - mSwitchClickTime >= doubleClickWindow): # Single click timeout
-        if pixelState: # If lights are ON, perform fade-out then fade-in for mode change
-            gc.collect() 
-            modes[currentModeIndex]() # Ensure current frame for source
-            prevMode = list(pixels)
-            exeFade(prevMode, OFF_COLOR_LIST) # Fade out
-            
-            currentModeIndex = (currentModeIndex + 1) % len(modes)
-            
-            gc.collect()
-            # Silently capture new mode's target state
-            targetMode = captureTarget(currentModeIndex)
-            # Strip is already visually off from the previous fade_out.
-            exeFade(OFF_COLOR_LIST, targetMode) # Fade in
-        else: # If lights are OFF, just update the mode index
-            currentModeIndex = (currentModeIndex + 1) % len(modes)
-        mSwitchClickTime = 0
-    
-    mSwitchLastState = mSwitchCurrentState
+    m_prev = m_state
 
-    # --- Light Control Logic ---
-    expectedPixelState = False
-    if lSwitchOn:
-        expectedPixelState = True
-    else: 
-        if photocellEnabled:
-            if pixelState: expectedPixelState = not (photocellLevel > photocellOffThreshold)
-            else: expectedPixelState = photocellLevel < photocellOnThreshold
-    
-    # --- Apply Light State (with Fades) ---
-    if expectedPixelState and not pixelState: # Request to Turn ON
-        gc.collect()
-        # Silently capture the target mode's first frame appearance
-        targetPixel_on = captureTarget(currentModeIndex)
-        
-        # Ensure strip is visually off before starting fade-in
-        pixels.fill(OFF_COLOR)
-        pixels.show() 
-        
-        exeFade(OFF_COLOR_LIST, targetPixel_on)
-        pixelState = True
+    # ── desired LED state calculation ────────────────────────
+    want_on = l_active
+    if not want_on and photocell_enabled:
+        if pixels_on:
+            want_on = photo_val <= PHOTO_OFF_THRESHOLD
+        else:
+            want_on = photo_val < PHOTO_ON_THRESHOLD
 
-    elif not expectedPixelState and pixelState: # Request to Turn OFF
-        gc.collect()
-        modes[currentModeIndex]() # Ensure current frame for source
-        sourcePixel_off = list(pixels)
-        
-        exeFade(sourcePixel_off, OFF_COLOR_LIST)
-        off()
+    # ── state transition handling ─────────────────────────────
+    if want_on and not pixels_on:
+        dbg("Turn ON: fade-in")
+        fade(OFF_LIST, capture(mode_idx))
+        pixels_on = True
 
-    elif pixelState: # Lights are ON and expected to stay ON
-        modes[currentModeIndex]()
-    
+    elif not want_on and pixels_on:
+        dbg("Turn OFF: fade-out")
+        fade(snapshot(), OFF_LIST)
+        pixels.fill(OFF)
+        pixels.show()
+        pixels_on = False
+
+    elif pixels_on:
+        MODES[mode_idx][1]()           # run animation frame
+
+    gc.collect()
     time.sleep(0.01)
