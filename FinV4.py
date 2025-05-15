@@ -1,8 +1,7 @@
 """
-NeoPixel controller for CircuitPython
-• PEP-8 style, no f-strings
-• Low heap churn, no fade-out flash
-• Lightweight debug messages (compile-time toggle)
+Streetcar NeoPixel Controller
+Emory Temple-Asheim, May 2025
+*** Sections of this program were generated using Gemini and other AI tools ***
 """
 
 import time
