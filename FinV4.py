@@ -15,7 +15,6 @@ from digitalio import DigitalInOut, Direction, Pull
 # ────────────────────── CONFIG ────────────────────────────────
 DEBUG = True                      # ← set True to see diagnostics
 
-# ── lightweight debug helper ──────────────────────────────────
 if DEBUG:
     def dbg(*args):
         print(*args)               # no string building
@@ -134,9 +133,9 @@ def capture(index):
     return buf
 
 
-def blink(colour):
+def blink(color):
     for _ in range(ALERT_BLINKS):
-        pixels.fill(colour)
+        pixels.fill(color)
         pixels.show()
         time.sleep(ALERT_BLINK_TIME)
         pixels.fill(OFF)
@@ -161,8 +160,8 @@ def mode_rainbow():
     rainbow_offset = (rainbow_offset + RAINBOW_SPEED) & 255
 
 
-def mode_static(colour):
-    pixels.fill(colour)
+def mode_static(color):
+    pixels.fill(color)
     pixels.show()
 
 
