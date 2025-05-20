@@ -22,7 +22,7 @@ else:
     def dbg(*_):
         pass                       # stub → zero run-time cost
 
-M_SWITCH_PIN = board.D3            # momentary switch (pull-up)
+M_SWITCH_PIN = board.D4            # momentary switch (pull-up)
 L_SWITCH_PIN = board.D1            # latching  switch (pull-up)
 PHOTOCELL_PIN = board.A2
 NEOPIXEL_PIN = board.D2
