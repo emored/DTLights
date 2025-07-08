@@ -13,56 +13,60 @@ import analogio
 from digitalio import DigitalInOut, Direction, Pull
 
 # ────────────────────── CONFIG ────────────────────────────────
-DEBUG = True                      # ← set True to see diagnostics
+DEBUG = True  # ← set True to see diagnostics
 
 if DEBUG:
-    def dbg(*args):
-        print(*args)               # no string building
-else:
-    def dbg(*_):
-        pass                       # stub → zero run-time cost
 
-M_SWITCH_PIN = board.D4            # momentary switch (pull-up)
-L_SWITCH_PIN = board.D1            # latching  switch (pull-up)
+    def dbg(*args):
+        print(*args)  # no string building
+
+else:
+
+    def dbg(*_):
+        pass  # stub → zero run-time cost
+
+
+M_SWITCH_PIN = board.D4  # momentary switch (pull-up)
+L_SWITCH_PIN = board.D1  # latching  switch (pull-up)
 PHOTOCELL_PIN = board.A2
 NEOPIXEL_PIN = board.D2
 
 NUM_PIXELS = 8
-DOUBLE_CLICK_WINDOW = 0.25         # s
+DOUBLE_CLICK_WINDOW = 0.25  # s
 
 PHOTO_ON_THRESHOLD = 8000
 PHOTO_OFF_THRESHOLD = 9000
 
 ALERT_BLINKS = 3
-ALERT_BLINK_TIME = 0.10            # s
+ALERT_BLINK_TIME = 0.10  # s
 
-RAINBOW_SPEED = 1                  # wheel step / loop
+RAINBOW_SPEED = 1  # wheel step / loop
 
 BREATH_MIN = 0.10
 BREATH_MAX = 1.00
 BREATH_STEP = 0.02
 
 FADE_STEPS = 8
-FADE_DELAY = 0.0135                # s
+FADE_DELAY = 0.0135  # s
 
 # ────────────────────── COLORS ───────────────────────────────
-OFF        = (0, 0, 0)
-CUST_YL    = (255, 150, 20)
-CUST_RD    = (255,  30, 30)
-WHITE      = (255, 255, 100)
+OFF = (0, 0, 0)
+CUST_YL = (255, 150, 20)
+CUST_RD = (255, 30, 30)
+WHITE = (255, 255, 100)
 
-S_RED      = (255,   0,   0)
-S_ORANGE   = (255, 120,   0)
-S_YELLOW   = (255, 200,   0)
-S_GREEN    = (  0, 255,   0)
-S_BLUE     = (  0,   0, 255)
-S_VIOLET   = (148,   0, 211)
-S_LBLUE    = (100, 180, 255)
+S_RED = (255, 0, 0)
+S_ORANGE = (255, 120, 0)
+S_YELLOW = (255, 200, 0)
+S_GREEN = (0, 255, 0)
+S_BLUE = (0, 0, 255)
+S_VIOLET = (148, 0, 211)
+S_LBLUE = (100, 180, 255)
 
-GREEN_OK   = (0, 255, 0)
-RED_ALERT  = (255, 0, 0)
+GREEN_OK = (0, 255, 0)
+RED_ALERT = (255, 0, 0)
 
-OFF_LIST = [OFF] * NUM_PIXELS      # reusable “blank” buffer
+OFF_LIST = [OFF] * NUM_PIXELS  # reusable “blank” buffer
 
 # ─────────────────── HARDWARE SET-UP ──────────────────────────
 m_switch = DigitalInOut(M_SWITCH_PIN)
@@ -78,9 +82,7 @@ l_switch.pull = Pull.UP
 photocell = analogio.AnalogIn(PHOTOCELL_PIN)
 photocell_enabled = True
 
-pixels = neopixel.NeoPixel(
-    NEOPIXEL_PIN, NUM_PIXELS, brightness=1.0, auto_write=False
-)
+pixels = neopixel.NeoPixel(NEOPIXEL_PIN, NUM_PIXELS, brightness=1.0, auto_write=False)
 
 # ───────────────────────── STATE ──────────────────────────────
 pixels_on = False
@@ -89,6 +91,7 @@ mode_idx = 0
 rainbow_offset = 0
 breath_intensity = BREATH_MIN
 breath_dir = 1
+
 
 # ─────────────────────── HELPERS ──────────────────────────────
 def wheel(pos):
@@ -121,7 +124,7 @@ def fade(src, dst):
 
 
 def snapshot():
-    return list(pixels)            # copy current strip buffer
+    return list(pixels)  # copy current strip buffer
 
 
 def capture(index):
@@ -141,6 +144,7 @@ def blink(color):
         pixels.fill(OFF)
         pixels.show()
         time.sleep(ALERT_BLINK_TIME)
+
 
 # ───────────────────────── MODES ──────────────────────────────
 def mode_default():
@@ -184,16 +188,16 @@ def mode_breathe():
 
 
 MODES = (
-    ("Default",        mode_default),
-    ("Static Red",     lambda: mode_static(S_RED)),
-    ("Static Orange",  lambda: mode_static(S_ORANGE)),
-    ("Static Yellow",  lambda: mode_static(S_YELLOW)),
-    ("Static Green",   lambda: mode_static(S_GREEN)),
-    ("Static Blue",    lambda: mode_static(S_BLUE)),
-    ("Static Violet",  lambda: mode_static(S_VIOLET)),
-    ("Static LBlue",   lambda: mode_static(S_LBLUE)),
-    ("Breathe White",  mode_breathe),
-    ("Rainbow",        mode_rainbow),
+    ("Default", mode_default),
+    ("Static Red", lambda: mode_static(S_RED)),
+    ("Static Orange", lambda: mode_static(S_ORANGE)),
+    ("Static Yellow", lambda: mode_static(S_YELLOW)),
+    ("Static Green", lambda: mode_static(S_GREEN)),
+    ("Static Blue", lambda: mode_static(S_BLUE)),
+    ("Static Violet", lambda: mode_static(S_VIOLET)),
+    ("Static LBlue", lambda: mode_static(S_LBLUE)),
+    ("Breathe White", mode_breathe),
+    ("Rainbow", mode_rainbow),
 )
 
 # ──────────────────── STARTUP ─────────────────────────────────
@@ -205,12 +209,12 @@ dbg("Startup complete")
 # ──────────────────── MAIN LOOP ───────────────────────────────
 while True:
     now = time.monotonic()
-    m_state = m_switch.value          # pull-up: True → not pressed
+    m_state = m_switch.value  # pull-up: True → not pressed
     l_active = not l_switch.value
     photo_val = photocell.value
 
     # ── momentary switch events ───────────────────────────────
-    if m_prev and not m_state:        # falling edge
+    if m_prev and not m_state:  # falling edge
         dbg("M-switch press @", now)
         if m_click_time and (now - m_click_time < DOUBLE_CLICK_WINDOW):
             photocell_enabled = not photocell_enabled
@@ -255,7 +259,7 @@ while True:
         pixels_on = False
 
     elif pixels_on:
-        MODES[mode_idx][1]()           # run animation frame
+        MODES[mode_idx][1]()  # run animation frame
 
     gc.collect()
     time.sleep(0.01)
